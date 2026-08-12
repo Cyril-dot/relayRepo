@@ -84,6 +84,16 @@ const BROWSER_HEADERS = {
   'sec-fetch-dest': 'empty',
 };
 
+/** Copy only the named headers through, preserving their values exactly. */
+function forward(headers, names) {
+  const out = {};
+  for (const n of names) {
+    const v = headers[n];
+    if (v !== undefined) out[n] = String(v);
+  }
+  return out;
+}
+
 function safeEqual(a, b) {
   const ab = Buffer.from(a ?? '');
   const bb = Buffer.from(b ?? '');
@@ -139,10 +149,24 @@ const server = createServer(async (req, res) => {
       method: req.method,
       headers: {
         ...BROWSER_HEADERS,
-        // Pass the caller's API key through UNTOUCHED. The relay never reads
-        // it, never stores it, never logs it.
-        ...(req.headers['x-api-key'] ? { 'x-api-key': String(req.headers['x-api-key']) } : {}),
-        ...(req.headers['content-type'] ? { 'content-type': String(req.headers['content-type']) } : {}),
+        // Forward every auth header RushPay understands, UNTOUCHED. The relay
+        // never reads them, never stores them, never logs them.
+        //
+        // An allowlist rather than a blanket copy, because forwarding the
+        // caller's Host, Origin or Cookie headers to a different domain is
+        // how a relay becomes a security problem.
+        //
+        // X-RushPay-Widget-Session is easy to forget and fails confusingly:
+        // RushPay replies "X-RushPay-Widget-Session header required" even
+        // though the caller sent it, because the relay quietly dropped it.
+        // Anything RushPay authenticates with belongs in this list.
+        ...forward(req.headers, [
+          'x-api-key',
+          'x-rushpay-widget-session',
+          'authorization',
+          'content-type',
+          'idempotency-key',
+        ]),
       },
       body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
       signal: AbortSignal.timeout(20_000),
